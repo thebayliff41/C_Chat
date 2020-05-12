@@ -12,8 +12,7 @@ int list_append(struct list * list, void * data) {
 	void * copy = malloc(size);
 	memcpy(copy, data, size);
 
-	if (list->data_size == 0) {
-		fputs("List not yet initialized", stderr);
+	if (size == 0) {
 		return -1;
 	}//if
 
@@ -37,6 +36,10 @@ int list_append(struct list * list, void * data) {
 void * list_pop(struct list * list) { 
 	size_t size = list->data_size;
 
+	if (size == 0) { //List not initialized
+		return NULL;
+	}
+
 	if (list->length == 0) {
 		puts("length == 0");
 		return NULL;
@@ -54,6 +57,10 @@ void * list_pop(struct list * list) {
 	return popped;
 }//pop
 
+/*
+ * Helper function to remove an element from the array by shifting each element 
+ * and removing the last one
+ */
 void shiftLeft(struct list * list, unsigned int index) {
 	for (unsigned int i = index; i < list->length - 1; i++) {
 		list->data[i] = list->data[i+1];
@@ -67,6 +74,10 @@ void shiftLeft(struct list * list, unsigned int index) {
  * Returns -1 if the value isn't found
  */
 int list_remove(struct list * list, void * data) {
+	if (list->data_size == 0) {
+		return 1;
+	}//if
+
 	for (unsigned int i = 0; i < list->length; i++) {
 		if (memcmp(data, list->data[i], list->data_size) == 0) {
 			free(list->data[i]);
@@ -82,6 +93,10 @@ int list_remove(struct list * list, void * data) {
  * Clean up the memory from the list
  */
 void list_destroy(struct list * list) {
+	if (list->data_size == 0) { //List not initialized
+		return;	
+	}//if
+
 	for (unsigned int i = 0; i < list->length; i++) {
 		free(list->data[i]);
 	}//for

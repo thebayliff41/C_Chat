@@ -9,11 +9,9 @@
 #include <pthread.h> //Multithreading
 
 #include "list.h" //socket_list
-#include "sharing.h" //PIDFILE
 
 #define LOOPBACK 127.0.0.1
 #define PORT 5556
-#define MSGSIZE 512
 
 struct thread_argument {
 	int socket;
@@ -28,10 +26,9 @@ struct custom_thread {
 
 
 void errorAndExit(char*);
-void cleanup(); 
+void cleanup(int); 
 void * handleThread(void*);
 void * manageThreads(void *);
-void interruptHandler(int);
 
 struct list thread_list; //global list of sockets in use
 pthread_mutex_t list_lock;
@@ -69,21 +66,9 @@ int main(int argc, char** argv) {
 		errorAndExit("Failed to start listening on host");
 	}//if
 
-	//place pid in file
-	FILE * pid_file;
-	if ((pid_file = fopen(PIDFILE, "w")) == NULL) {
-		errorAndExit("Failed to write to pid file");
-	}//if
-	fprintf(pid_file, "%d", getpid());
-	if (fclose(pid_file)) {
-		errorAndExit("Failed to close file");
-	}//if
-
-	atexit(cleanup);
-
 	//ntohs converts network-readable value to host-readable value
 	printf("Sever: Server started on port: %d\n", ntohs(host.sin_port));
-	signal(SIGUSR1, interruptHandler); //Keyboard interrupt will be handled correctly
+	signal(SIGINT, cleanup); //Keyboard interrupt will be handled correctly
 
 	list_init(&thread_list, sizeof(struct custom_thread));
 
@@ -107,24 +92,41 @@ int main(int argc, char** argv) {
 		//will assign these randomly
 		printf("Server: Received connection from %s on port %d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
 
+		//list_append(&thread_list, (void *) &client_sock);
+	
 		//Give each client their own thread
 		struct custom_thread * thread = malloc(sizeof(struct custom_thread));
 		struct thread_argument * args = malloc(sizeof(struct thread_argument));
 
+		//struct custom_thread thread;
+		//struct thread_argument args;
+		
 		//Init values
 		args->socket = client_sock;
 		args->finished = 0;
 		thread->args = args;
-		pthread_mutex_init(&(args->finish_lock), NULL);
+		printf("Thread->args->finished = %d\n", thread->args->finished);
+		
+		//args.socket = client_sock;
+		//args.finished = 0;
+		//thread.args = &args;
+		//pthread_mutex_init(&(args.finish_lock), NULL);
 
 		pthread_mutex_lock(&list_lock);
 		list_append(&thread_list, (void *) thread);
 		pthread_mutex_unlock(&list_lock);
 
 		if (pthread_create(&(thread->thread), NULL, handleThread, (void *) args)) {
+		//if (pthread_create(&(thread.thread), NULL, handleThread, (void *) args)) {
 			fputs("Error: Unable to create thread", stderr);
 		}//if
 
+		//close(client_sock);
+		//puts("Clinet socket closed");
+
+		//if (pop(&socket_list) == -1) {
+		//	fputs("Failed to pop from the socket list.", stderr);
+		//}//if
 	}//while
 	close(server_socket);
 	list_destroy(&thread_list);
@@ -137,27 +139,24 @@ int main(int argc, char** argv) {
 void * manageThreads(void * vargp) {
 	while(1) {
 		pthread_mutex_lock(&list_lock);
+		puts("here");
 		for (unsigned int i = 0; i < thread_list.length; i++) {
 			struct custom_thread * thread = list_get(&thread_list, i);
-
-			//We don't want to block and wait for the thread to finish
-			if (pthread_mutex_trylock(&(thread->args->finish_lock))) {
-				puts("Thread was busy");
-				continue;
-			}//if
-
-			int finished = thread->args->finished;
-			pthread_mutex_unlock(&(thread->args->finish_lock));
-			if (finished) { //Free memory once thread is done
-				//We need to free the args, but the list will handle freeing the thread
-				free(thread->args);
-				if(list_remove(&thread_list, thread)) {
-					fputs("Failed to remove thread from list", stderr);
-				}//if
+			pthread_mutex_lock(&(thread->args->finish_lock));
+			printf("Thread->args->finished = %d\n", thread->args->finished);
+			if (thread->args->finished) { //Free memory once thread is done
+				puts("Thread finished");
+				close(thread->args->socket);
+				list_remove(&thread_list, thread);
+				pthread_mutex_unlock(&(thread->args->finish_lock));
+				//free(thread->args);
+				//free(thread);
+			} else {
+				pthread_mutex_unlock(&(thread->args->finish_lock));
 			}//if
 		}//for
 		pthread_mutex_unlock(&list_lock);
-		sleep(1); //We don't want to poll too often
+		sleep(1);
 	}//while
 }//manageThreads
 
@@ -166,25 +165,16 @@ void * manageThreads(void * vargp) {
  */
 void * handleThread(void *vargp) {
 	struct thread_argument * args = (struct thread_argument*) vargp;
-	char message[MSGSIZE];
 	printf("I started a thread with a socket number of %d\n", args->socket);
-
-	ssize_t received_size = 0;
-	while((received_size = recv(args->socket, message, MSGSIZE, 0))) {
-		if (received_size == -1) { //Error
-			perror("Error receiving from client");
-			break;
-		}//if
-		printf("Message from client: %s\n", message);
-	}//while
-	puts("Finished with client");
 
 	//Lock finished while writing to it
 	pthread_mutex_lock(&(args->finish_lock));
+	puts("finishing");
 	args->finished = 1;
+	sleep(5000);
+	puts("slept for 10");
 	pthread_mutex_unlock(&(args->finish_lock));
 
-	close(args->socket);
 	pthread_exit(NULL);
 }//handleThread
 
@@ -198,16 +188,13 @@ void errorAndExit(char * error) {
 }//errorAndExit
 
 /*
- */
-void cleanup() {
-	list_destroy(&thread_list);
-	close(server_socket);
-}//cleanupSocket
-
-/*
  * If there is a keyboard interrupt, the connection should be closed gracefully
  */
-void interruptHandler(int sig) {
-	puts("I did it ma!");
+void cleanup(int signal) {
+	//If in the middle of a connection, close the connection safely
+	if (thread_list.length > 0)
+		close(*((int *)list_pop(&thread_list)));
+	list_destroy(&thread_list);
+	close(server_socket);
 	exit(0);
-}//interruptHandler
+}//cleanupSocket

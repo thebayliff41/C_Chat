@@ -1,14 +1,27 @@
 CC := gcc
 CFLAGS := -g
 SOURCE := $(wildcard *.c)
+DEPS := $(wildcard *.h)
 OBJDIR := .objects
 OBJECTS := $(addprefix $(OBJDIR)/,$(patsubst %.c, %.o, $(SOURCE)))
-EXECS = server
+EXECS := server server_shutdown
 
-server : $(OBJECTS)
-	$(CC) $(CFLAGS) -o server $(OBJECTS)
+_SERVER_OBJ := server.o list.o
+SERVER_OBJ := $(patsubst %,$(OBJDIR)/%,$(_SERVER_OBJ))
 
-$(OBJDIR)/%.o: %.c
+_SHUTDOWN_OBJ := server_shutdown.o
+_SHUTUDOWN_OBJ := $(patsubst %,$(OBJDIR)/%,$(_SHUTDOWN_OBJ))
+
+main: $(EXECS)
+
+server: $(SERVER_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+server_shutdown: $(_SHUTDOWN_OBJ)
+	echo $(_SHUTDOWN_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(OBJDIR)/%.o: %.c $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(OBJDIR):
@@ -16,6 +29,9 @@ $(OBJDIR):
 
 rs:
 	./server
+
+shutdown:
+	./server_shutdown
 
 .PHONY : clean
 clean:
