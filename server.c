@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
 
 	//ntohs converts network-readable value to host-readable value
 	printf("Sever: Server started on port: %d\n", ntohs(host.sin_port));
-	signal(SIGUSR1, interruptHandler); //Keyboard interrupt will be handled correctly
+	signal(SIGUSR1, interruptHandler); //USR1 interrupt will be used to init shutdown
 
 	list_init(&thread_list, sizeof(struct custom_thread));
 
@@ -142,13 +142,17 @@ void * manageThreads(void * vargp) {
 
 			//We don't want to block and wait for the thread to finish
 			if (pthread_mutex_trylock(&(thread->args->finish_lock))) {
-				puts("Thread was busy");
 				continue;
 			}//if
 
 			int finished = thread->args->finished;
 			pthread_mutex_unlock(&(thread->args->finish_lock));
 			if (finished) { //Free memory once thread is done
+				//Once the thread says it's done, wait for the thread to finish whatever
+				//it may be doing
+				
+				pthread_join(thread->thread, NULL);
+
 				//We need to free the args, but the list will handle freeing the thread
 				free(thread->args);
 				if(list_remove(&thread_list, thread)) {
@@ -175,7 +179,12 @@ void * handleThread(void *vargp) {
 			perror("Error receiving from client");
 			break;
 		}//if
-		printf("Message from client: %s\n", message);
+		memset(message + received_size, '\0', MSGSIZE - received_size);
+		printf("Message from client: %s", message);
+		ssize_t send_size;
+		if((send_size = send(args->socket, "I got it!\n", 10, 0)) == -1) {
+			perror("Error sending to client");
+		}//if
 	}//while
 	puts("Finished with client");
 
@@ -202,12 +211,12 @@ void errorAndExit(char * error) {
 void cleanup() {
 	list_destroy(&thread_list);
 	close(server_socket);
+	remove(PIDFILE);
 }//cleanupSocket
 
 /*
  * If there is a keyboard interrupt, the connection should be closed gracefully
  */
 void interruptHandler(int sig) {
-	puts("I did it ma!");
 	exit(0);
 }//interruptHandler
