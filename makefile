@@ -1,10 +1,15 @@
 CC := gcc
-CFLAGS := -g
+CFLAGS := -g -Wall -Wextra -pedantic -Wno-unused-parameter
 SOURCE := $(wildcard *.c)
 DEPS := $(wildcard *.h)
 OBJDIR := .objects
 OBJECTS := $(addprefix $(OBJDIR)/,$(patsubst %.c, %.o, $(SOURCE)))
-EXECS := server server_shutdown
+EXECS := server server_shutdown client start_server
+
+NCURSES = -lncurses
+
+_CLIENT_OBJ := client.o
+CLIENT_OBJ := $(patsubst %,$(OBJDIR)/%,$(_CLIENT_OBJ))
 
 _SERVER_OBJ := server.o list.o
 SERVER_OBJ := $(patsubst %,$(OBJDIR)/%,$(_SERVER_OBJ))
@@ -17,8 +22,13 @@ main: $(EXECS)
 server: $(SERVER_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
 
-server_shutdown: $(_SHUTDOWN_OBJ)
-	echo $(_SHUTDOWN_OBJ)
+server_shutdown: $(SHUTDOWN_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+client: $(CLIENT_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(NCURSES)
+
+start_server: start_server.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(OBJDIR)/%.o: %.c $(DEPS)
@@ -28,10 +38,13 @@ $(OBJDIR):
 	mkdir $(OBJDIR)
 
 rs:
-	./server
+	./start_server
 
-shutdown:
+ks:
 	./server_shutdown
+
+rc:
+	./client Bailey
 
 .PHONY : clean
 clean:

@@ -7,50 +7,50 @@
 #include <unistd.h> //close()
 #include <signal.h> //signal handler
 #include <pthread.h> //Multithreading
+#include <ctype.h> //isgraph()
+#include <sys/time.h> //gettimeofday
+#include <time.h> //localtime
 
-#include "list.h" //socket_list
-#include "sharing.h" //PIDFILE
+#include "list.h" //thread_list
+#include "sharing.h" //PIDFILE, other defines
+#include "server.h"
 
-#define LOOPBACK 127.0.0.1
-#define PORT 5556
-#define MSGSIZE 512
-
-struct thread_argument {
-	int socket;
-	int finished;
-	pthread_mutex_t finish_lock;
-};
-
-struct custom_thread {
-	pthread_t thread;
-	struct thread_argument * args;
-}; //custom_thread
-
-
-void errorAndExit(char*);
-void cleanup(); 
-void * handleThread(void*);
-void * manageThreads(void *);
-void interruptHandler(int);
-
-struct list thread_list; //global list of sockets in use
+struct list thread_list;
 pthread_mutex_t list_lock;
+
+struct list update_list;
+//Different semaphore
+pthread_t update;
 
 int server_socket; //The socket that clinets will connect to
 
+FILE * log_file; //log file
+
+//How to compare the custom threads. If they share the same socket, then they
+//have to be the same.
+int compareThreads(const void * p1, const void * p2) {
+	const struct custom_thread * t1 = (struct custom_thread *) p1;
+	const struct custom_thread * t2 = (struct custom_thread *) p2;
+	return t1->args->socket == t2->args->socket;
+}//compareThreads
+
 int main(int argc, char** argv) {
-	int yes = 1; //Pointer used in setsockopt
+	if ((log_file = fopen(LOGFILE, "a")) == NULL) { //Open log file
+		fputs("Error opening log file", stderr);
+		exit(1);
+	}//if
+
 	struct sockaddr_in host, client; //Internet socket addresses (subset of socket addresses)
 
 	//Create socket utilizing TCP
 	if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-		errorAndExit("Creation of socket failed");
+		logAndExit("Creation of socket failed");
 	}//if
 
 	//Set socket-level options to allow the reuse of the address and port. This
 	//avoids "address already in use" error
-	if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &yes, sizeof(yes)) == 0) {
-		errorAndExit("Failed to set socket options");
+	if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &(int){1}, sizeof(int)) == 0) {
+		logAndExit("Failed to set socket options");
 	}//if
 
 	host.sin_family = AF_INET; //We will communicate with IPV4 Addresses.
@@ -60,38 +60,42 @@ int main(int argc, char** argv) {
 
 	//Bind the socket to the port and address given ^
 	if (bind(server_socket, (struct sockaddr *)&host, sizeof(host)) == -1) {
-		errorAndExit("Failed ot bind to host");
+		logAndExit("Failed to bind to host");
 	}//if
 
 	//Listen for attempted connection on the address and the port. Maximum of 5
 	//waiting connections at a time. 
 	if (listen(server_socket, 5) == -1) {
-		errorAndExit("Failed to start listening on host");
+		logAndExit("Failed to start listening on host");
 	}//if
 
 	//place pid in file
 	FILE * pid_file;
 	if ((pid_file = fopen(PIDFILE, "w")) == NULL) {
-		errorAndExit("Failed to write to pid file");
+		logAndExit("Failed open pid file");
 	}//if
+
 	fprintf(pid_file, "%d", getpid());
+
 	if (fclose(pid_file)) {
-		errorAndExit("Failed to close file");
+		logAndExit("Failed to close file");
 	}//if
 
 	atexit(cleanup);
 
 	//ntohs converts network-readable value to host-readable value
-	printf("Sever: Server started on port: %d\n", ntohs(host.sin_port));
+	char log_message[100];
+	sprintf(log_message, "Sever: Server started on port: %d\n", ntohs(host.sin_port));
+	logm(log_message);
 	signal(SIGUSR1, interruptHandler); //USR1 interrupt will be used to init shutdown
 
-	list_init(&thread_list, sizeof(struct custom_thread));
-
+	list_init(&thread_list, sizeof(struct custom_thread), compareThreads);
+	//init sem here
 	pthread_mutex_init(&list_lock, NULL);
 
 	pthread_t manager_thread;
 	if (pthread_create(&manager_thread, NULL, manageThreads, NULL)) {
-		fputs("Error: Unable to create thread", stderr);
+		logAndExit("Error: Unable to create thread");
 	}//if
 	
 	//Loop over accepting new connections
@@ -99,17 +103,25 @@ int main(int argc, char** argv) {
 		socklen_t sock_size = sizeof(struct sockaddr_in); //Get length of internet socket, needed when accepting new connection
 		int client_sock = accept(server_socket, (struct sockaddr *) &client, &sock_size); //Accept new connection and fill in client details
 		if (client_sock == -1) {
-			perror("Client failed to connect");
+			logm("Client failed to connect");
 			continue;
 		}//if
 
 		//Note: client side port numbers aren't important. Typically, the system
 		//will assign these randomly
-		printf("Server: Received connection from %s on port %d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+		char client_address[INET_ADDRSTRLEN];
+
+		if (inet_ntop(AF_INET, &(client.sin_addr), client_address, INET_ADDRSTRLEN) == NULL) {
+			logm("Error getting string address using inet_ntop");
+		} else {
+			sprintf(log_message, "Server: Received connection from %s on port %d", client_address, ntohs(client.sin_port));
+			logm(log_message);
+		} //if-else
 
 		//Give each client their own thread
 		struct custom_thread * thread = malloc(sizeof(struct custom_thread));
 		struct thread_argument * args = malloc(sizeof(struct thread_argument));
+		//printf("Thread pointer = %p\n", thread);
 
 		//Init values
 		args->socket = client_sock;
@@ -122,13 +134,22 @@ int main(int argc, char** argv) {
 		pthread_mutex_unlock(&list_lock);
 
 		if (pthread_create(&(thread->thread), NULL, handleThread, (void *) args)) {
-			fputs("Error: Unable to create thread", stderr);
+			logm("Error: Unable to create thread");
 		}//if
 
+		free(thread); //Because the list re-mallocs the thread
+
 	}//while
-	close(server_socket);
-	list_destroy(&thread_list);
 }//main
+
+void printPointers() {
+	pthread_mutex_lock(&list_lock);
+	for (unsigned int i = 0; i < thread_list.length; i++) {
+		struct custom_thread * thread = list_get(&thread_list, i);
+		printf("thread pointer: %p, args pointer %p\n", (void *)thread, (void *)thread->args);
+	}//for
+	pthread_mutex_unlock(&list_lock);
+}//printPointers
 
 /*
  * Thread that manages other running threads. Checks every second if a
@@ -149,14 +170,13 @@ void * manageThreads(void * vargp) {
 			pthread_mutex_unlock(&(thread->args->finish_lock));
 			if (finished) { //Free memory once thread is done
 				//Once the thread says it's done, wait for the thread to finish whatever
-				//it may be doing
-				
+				//it may be doing for cleanup
 				pthread_join(thread->thread, NULL);
 
 				//We need to free the args, but the list will handle freeing the thread
 				free(thread->args);
 				if(list_remove(&thread_list, thread)) {
-					fputs("Failed to remove thread from list", stderr);
+					logm("Failed to remove thread from list");
 				}//if
 			}//if
 		}//for
@@ -171,22 +191,42 @@ void * manageThreads(void * vargp) {
 void * handleThread(void *vargp) {
 	struct thread_argument * args = (struct thread_argument*) vargp;
 	char message[MSGSIZE];
-	printf("I started a thread with a socket number of %d\n", args->socket);
-
+	char broadcast[MSGSIZE + NAMESIZE + 2];
 	ssize_t received_size = 0;
+
+	received_size = recv(args->socket, args->name, NAMESIZE - 1, 0);
+	args->name[received_size] = '\0';
+	int name_length = strlen(args->name);
+	//the broadcast always starts with [name]:[space]
+	strcpy(broadcast, args->name);
+	strcpy(broadcast + name_length, ": ");
+
+	sprintf(message, "I started a thread with a socket number of %d, their name is %s", args->socket, args->name);
+	logm(message);
+
 	while((received_size = recv(args->socket, message, MSGSIZE, 0))) {
 		if (received_size == -1) { //Error
-			perror("Error receiving from client");
+			logm("Error receiving from client");
 			break;
 		}//if
-		memset(message + received_size, '\0', MSGSIZE - received_size);
-		printf("Message from client: %s", message);
-		ssize_t send_size;
-		if((send_size = send(args->socket, "I got it!\n", 10, 0)) == -1) {
-			perror("Error sending to client");
-		}//if
+		message[received_size] = '\0';
+
+		//Remove special characters from string
+		char * c = message;
+		for (char * m = message; *m != '\0'; m++) {
+			if (isprint(*m)) {
+				*c++ = *m;
+			}//if
+		}//for
+		*c = '\0';
+		
+		//printf("Server: Message from client: %s\n", message);
+		strcpy(broadcast + name_length + 2, message);
+		//broadcast[name_length + received_size + 2] = '\0'; //strcpy already
+		//convers \0
+		//Convert to it's own thread (using a semaphore)
+		updateClients(broadcast, args->socket, strlen(broadcast));
 	}//while
-	puts("Finished with client");
 
 	//Lock finished while writing to it
 	pthread_mutex_lock(&(args->finish_lock));
@@ -197,21 +237,61 @@ void * handleThread(void *vargp) {
 	pthread_exit(NULL);
 }//handleThread
 
-/*
- * Perror the given message and exit the program with an error code of
- * EXIT_FAILURE 
- */
-void errorAndExit(char * error) {
-	perror(error);
-	exit(EXIT_FAILURE);
-}//errorAndExit
 
 /*
+ * Send specified message to all other connected clients.
+ */
+void updateClients(const char * message, int original_socket, int message_length) {
+	pthread_mutex_lock(&list_lock);
+	for (unsigned int i = 0; i < thread_list.length; i++) {
+		struct custom_thread * thread = list_get(&thread_list, i);
+		if (thread->args->socket == original_socket) { //don't send to original socket
+			continue;
+		}//if
+
+		ssize_t total = 0;
+		ssize_t sent;
+		while(total != message_length) {
+			if ((sent = send(thread->args->socket, message, message_length, 0)) == -1) {
+				logm("Error sending to client");
+				break;
+			}//if
+			total += sent;
+		}//while
+	}//for
+	pthread_mutex_unlock(&list_lock);
+}//updateClients
+
+/*
+ * Cleanup the server -- Free the memory, close the server socket, remove the
+ * temporary file
  */
 void cleanup() {
-	list_destroy(&thread_list);
-	close(server_socket);
-	remove(PIDFILE);
+	pthread_mutex_lock(&list_lock);
+	for (unsigned int i = 0; i < thread_list.length; i++) {
+		struct custom_thread * thread = list_get(&thread_list, i);
+
+		pthread_cancel(thread->thread);
+		pthread_join(thread->thread, NULL);
+
+		//We need to free the args, but the list will handle freeing the thread
+		free(thread->args);
+		if(list_remove(&thread_list, thread)) {
+			logm("Failed to remove thread from list");
+		}//if
+	}//for
+	pthread_mutex_unlock(&list_lock);
+	if (close(server_socket)) {
+		logm("Error closing server_socket");
+	}//if
+
+	if (remove(PIDFILE)) {
+		logm("Unable to remove PIDFILE");
+	}//if
+
+	if (fclose(log_file)) {
+		perror("Error closing log file");
+	}//if
 }//cleanupSocket
 
 /*
@@ -220,3 +300,26 @@ void cleanup() {
 void interruptHandler(int sig) {
 	exit(0);
 }//interruptHandler
+
+void logAndExit(const char * log_message) {
+	logm(log_message);
+	exit(1);
+}//logAndExit
+
+void logm(const char * log_message) {
+	struct timeval time;
+	//+ 1 to include room for \n (TIMESIZE makes room for '\0')
+	char * fmessage = malloc((strlen(log_message) + TIMESIZE) * sizeof(char)); 
+	char time_string[TIMESIZE]; //mm/dd/yy_hh:mm:ss_\0
+	if (gettimeofday(&time, NULL)) { //Error
+		fputs("Error getting time of day", log_file);
+	} else { //Success
+		struct tm * now = localtime(&(time.tv_sec));
+		strftime(time_string, TIMESIZE, "%m/%d/%y %T ", now); //Convert time to string and store in time_string
+		strcpy(fmessage, time_string);
+	}//if-else
+	strcpy(fmessage + strlen(time_string), log_message);
+
+	fprintf(log_file, "%s\n", fmessage);
+	free(fmessage);
+}//log
