@@ -12,5 +12,6 @@ void * sendThread(void *);
 void cleanup(void);
 void killScreen(void);
 void moveToMessage(void);
+void writePrompt(void);
 
 #endif

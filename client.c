@@ -14,6 +14,8 @@
 
 int sockfd; 
 int rows, cols; //rows = y, cols = x
+WINDOW * chat_window;
+WINDOW * prompt_window;
 
 int main(int argc, char ** argv) {
 	atexit(killScreen);
@@ -21,6 +23,12 @@ int main(int argc, char ** argv) {
 	getmaxyx(stdscr, rows, cols);
 	raw(); //Doesn't create signal on control characters (C-Z)
 	noecho(); //Don't print what user types
+	//Note, now that multiple windows are being used, we need to use thw "w"
+	//version of functions to specify which window. Calling the normal refresh()
+	//will break the screen (because we don't want to update stdscr
+	chat_window = newwin(/*rows - 1*/5, cols, 0, 0);
+	prompt_window = newwin(1, cols, rows - 1, 0);
+	scrollok(chat_window, TRUE);
 
 	if (argc != 2) {
 		fprintf(stderr, "USAGE: %s [USER_NAME]\n", *argv);
@@ -78,10 +86,10 @@ int main(int argc, char ** argv) {
 
 	//Get the IP address of the server
 	inet_ntop(AF_INET, &((struct sockaddr_in *)iterator->ai_addr)->sin_addr, host, INET_ADDRSTRLEN);
-	printw("IP address of server: %s\nSocket number = %d\n", host, sockfd);
+	wprintw(chat_window, "IP address of server: %s\nSocket number = %d\n", host, sockfd);
 	freeaddrinfo(infoptr);
 
-	refresh(); //Show screen from ncurses
+	wrefresh(chat_window); //Show screen from ncurses
 
 	//The first message should be our name
 	send(sockfd, name, strlen(name), 0); 
@@ -107,7 +115,9 @@ void * receiveThread(void * vargp) {
 	char message[MSGSIZE];
 	ssize_t received_size = 0;
 	int cur_row = 0;
-	int row, col;
+	int sub_rows, sub_cols;
+	getmaxyx(chat_window, sub_rows, sub_cols);
+	//int row, col;
 	while ((received_size = recv(sockfd, message, MSGSIZE, 0)) > 0) {
 		if (received_size == -1) { //Error
 			perror("Error receiving from server");
@@ -116,10 +126,17 @@ void * receiveThread(void * vargp) {
 
 		message[received_size] = '\0';
 
-		getyx(stdscr, row, col);
-		mvprintw(cur_row++, 0, "%s\n", message);
-		move(row, col);
-		refresh();
+		if (cur_row == sub_rows - 1) { //at the bottom row
+			//scroll(chat_window);
+			mvwprintw(chat_window, cur_row, 0, "%s\n", message);
+		} else {
+			mvwprintw(chat_window, cur_row++, 0, "%s\n", message);
+		}//if-else
+		//mvwprintw(chat_window, cur_row++, 0, "%s\n", message);
+		moveToMessage();
+		wrefresh(chat_window);
+		wrefresh(prompt_window);
+		//refresh();
 	}//while
 	pthread_cancel(*((pthread_t *) vargp));
 	pthread_exit(NULL);
@@ -135,13 +152,13 @@ void * sendThread(void * vargp) {
 	ssize_t sent; //What has been sent so far
 
 	attron(A_BOLD);
-	mvprintw(rows - 1, 0, PROMPT);
+	mvwprintw(prompt_window, 0, 0, PROMPT);
 	attroff(A_BOLD);
-	refresh();
+	wrefresh(prompt_window);
 	echo();
 
 	while (1) {
-		getstr(message);
+		wgetstr(prompt_window, message);
 		moveToMessage();
 		clrtoeol();
 
@@ -169,6 +186,8 @@ void cleanup() {
 	if (close(sockfd)) {
 		perror("Error closing socket");
 	}//if
+	delwin(chat_window);
+	delwin(prompt_window);
 }//cleanup
 
 void killScreen() {
@@ -176,5 +195,12 @@ void killScreen() {
 }//killScreen
 
 void moveToMessage() {
-	move(rows - 1, strlen(PROMPT));
-}//
+	wmove(prompt_window, 0, strlen(PROMPT));
+}//moveToMessage
+
+void writePrompt() {
+	attron(A_BOLD);
+	mvwprintw(prompt_window, 0, 0, PROMPT);
+	attroff(A_BOLD);
+	wrefresh(prompt_window);
+}//writePrompt
