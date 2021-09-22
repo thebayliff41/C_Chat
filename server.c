@@ -22,7 +22,7 @@ struct list update_list;
 //Different semaphore
 pthread_t update;
 
-int server_socket; //The socket that clinets will connect to
+int server_socket; //The socket that clients will connect to
 
 FILE * log_file; //log file
 
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
 
 	//Set socket-level options to allow the reuse of the address and port. This
 	//avoids "address already in use" error
-	if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &(int){1}, sizeof(int)) == 0) {
+	if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &(int){1}, sizeof(int)) < 0) {
 		logAndExit("Failed to set socket options");
 	}//if
 
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
 	//ntohs converts network-readable value to host-readable value
 	char log_message[100];
-	sprintf(log_message, "Sever: Server started on port: %d\n", ntohs(host.sin_port));
+	sprintf(log_message, "Sever: Server started on port: %d", ntohs(host.sin_port));
 	logm(log_message);
 	signal(SIGUSR1, interruptHandler); //USR1 interrupt will be used to init shutdown
 
@@ -120,8 +120,14 @@ int main(int argc, char** argv) {
 
 		//Give each client their own thread
 		struct custom_thread * thread = malloc(sizeof(struct custom_thread));
+		if (thread == NULL) {
+			logAndExit("Error in malloc");	
+		}//if
 		struct thread_argument * args = malloc(sizeof(struct thread_argument));
-		//printf("Thread pointer = %p\n", thread);
+		if (args == NULL) {
+			free(thread);
+			logAndExit("Error in malloc");	
+		}//if
 
 		//Init values
 		args->socket = client_sock;
@@ -134,7 +140,8 @@ int main(int argc, char** argv) {
 		pthread_mutex_unlock(&list_lock);
 
 		if (pthread_create(&(thread->thread), NULL, handleThread, (void *) args)) {
-			logm("Error: Unable to create thread");
+			free(thread);
+			logAndExit("Error: Unable to create thread");
 		}//if
 
 		free(thread); //Because the list re-mallocs the thread
@@ -289,6 +296,8 @@ void cleanup() {
 		logm("Unable to remove PIDFILE");
 	}//if
 
+	logm("Shutting down server");
+
 	if (fclose(log_file)) {
 		perror("Error closing log file");
 	}//if
@@ -308,18 +317,14 @@ void logAndExit(const char * log_message) {
 
 void logm(const char * log_message) {
 	struct timeval time;
-	//+ 1 to include room for \n (TIMESIZE makes room for '\0')
-	char * fmessage = malloc((strlen(log_message) + TIMESIZE) * sizeof(char)); 
-	char time_string[TIMESIZE]; //mm/dd/yy_hh:mm:ss_\0
+	char time_string[TIMESIZE] = "Unknown Time: "; //mm/dd/yy_hh:mm:ss:_\0
 	if (gettimeofday(&time, NULL)) { //Error
 		fputs("Error getting time of day", log_file);
 	} else { //Success
 		struct tm * now = localtime(&(time.tv_sec));
-		strftime(time_string, TIMESIZE, "%m/%d/%y %T ", now); //Convert time to string and store in time_string
-		strcpy(fmessage, time_string);
+		strftime(time_string, TIMESIZE, "%m/%d/%y %T: ", now); //Convert time to string and store in time_string
 	}//if-else
-	strcpy(fmessage + strlen(time_string), log_message);
 
-	fprintf(log_file, "%s\n", fmessage);
-	free(fmessage);
+	fprintf(log_file, "%s%s\n", time_string, log_message);
+	//fprintf(log_file, "%s\n", log_message);
 }//log

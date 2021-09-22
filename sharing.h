@@ -10,7 +10,7 @@
  * Perror the given message and exit the program with an error code of
  * EXIT_FAILURE 
  */
-void errorAndExit(char * error) {
+void errorAndExit(const char * error) {
 	perror(error);
 	exit(EXIT_FAILURE);
 }//errorAndExit

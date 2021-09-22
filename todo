@@ -1,1 +1,4 @@
-Use ncurses to customize screen layout
+Use ncurses to customize screen layout //DONE
+Make updateClients() use a separate thread + semaphore
+Show active users on connection
+Scrollback messages

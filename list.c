@@ -1,4 +1,5 @@
 #include "list.h"
+
 /*
  * Appends a socket value into the list
  *
@@ -23,7 +24,7 @@ int list_append(struct list * list, const void * data) {
 	list->length++;
 
 	return 0;
-}//add
+}//list_append
 
 /*
  * Pops the last value off the list
@@ -55,7 +56,7 @@ void * list_pop(struct list * list) {
 
 
 	return popped;
-}//pop
+}//list_pop
 
 void * list_pop_first(struct list * list) { 
 	size_t size = list->data_size;
@@ -79,7 +80,7 @@ void * list_pop_first(struct list * list) {
 	list->length--;
 
 	return popped;
-}//pop
+}//list_pop_first
 
 /*
  * Helper function to remove an element from the array by shifting each element 
@@ -112,7 +113,7 @@ int list_remove(struct list * list, const void * data) {
 		}//if
 	}//for
 	return 1;
-}//remove
+}//list_remove
 
 /*
  * Clean up the memory from the list
@@ -126,13 +127,14 @@ void list_destroy(struct list * list) {
 		free(list->data[i]);
 	}//for
 	free(list->data);
-}//destroy
+	list->data_size = 0;
+}//list_destroy
 
 void list_printInts(const struct list * list) {
 	for (unsigned int i = 0; i < list->length; i++) {
 		printf("list[%d] = %d\n", i, *((int *)list->data[i]));
 	}//for
-}//printInts
+}//list_printInts
 
 void * list_get(const struct list * list, unsigned int index) {
 	if (index > list->length) {
@@ -145,7 +147,7 @@ void * list_get(const struct list * list, unsigned int index) {
 	}//if
 
 	return list->data[index];
-}//get
+}//list_get
 
 /*
  * Initializes the list
@@ -155,4 +157,4 @@ void list_init(struct list * list, size_t size, int (*cmp)(const void *, const v
 	list->data_size = size;
 	list->length = 0;
 	list->cmp = cmp;
-}//init
+}//list_init

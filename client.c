@@ -14,21 +14,31 @@
 
 int sockfd; 
 int rows, cols; //rows = y, cols = x
-WINDOW * chat_window;
-WINDOW * prompt_window;
+WINDOW * chat_window; //Where the messages are displayed
+WINDOW * prompt_window; //Where the prompt is displayed
 
 int main(int argc, char ** argv) {
-	atexit(killScreen);
-	initscr(); //Start ncurses
+	if (initscr() == NULL) { //Start ncurses
+		errorAndExit("Can't init ncurses");
+	}//if 
+	if (atexit(killScreen)) {
+		errorAndExit("Error registering exit handler");
+	}//if
 	getmaxyx(stdscr, rows, cols);
 	raw(); //Doesn't create signal on control characters (C-Z)
 	noecho(); //Don't print what user types
-	//Note, now that multiple windows are being used, we need to use thw "w"
+	//Note, now that multiple windows are being used, we need to use the "w"
 	//version of functions to specify which window. Calling the normal refresh()
-	//will break the screen (because we don't want to update stdscr
-	chat_window = newwin(/*rows - 1*/5, cols, 0, 0);
-	prompt_window = newwin(1, cols, rows - 1, 0);
-	scrollok(chat_window, TRUE);
+	//will break the screen (because we don't want to update stdscr)
+	
+	if ((chat_window = newwin(/*rows - 1*/5, cols, 0, 0)) == NULL) {
+		errorAndExit("Can't create chat window");	
+	}//if
+	if ((prompt_window = newwin(1, cols, rows - 1, 0)) == NULL) {
+		errorAndExit("Can't create chat window");	
+	}//if
+
+	scrollok(chat_window, TRUE); //Allow scrolling on newline
 
 	if (argc != 2) {
 		fprintf(stderr, "USAGE: %s [USER_NAME]\n", *argv);
@@ -98,11 +108,14 @@ int main(int argc, char ** argv) {
 	pthread_t read;
 	if (pthread_create(&write, NULL, sendThread, (void *) &read)) {
 		fputs("Error: Unable to create thread", stderr);
+		exit(1);
 	}//if
 	if (pthread_create(&read, NULL, receiveThread, (void *) &write)) {
 		fputs("Error: Unable to create thread", stderr);
+		exit(1);
 	}//if
-	//Once write is done, we don't need read anymore
+	//Must wait for both threads to finish so we don't preemptively end the
+	//program
 	pthread_join(write, NULL);
 	pthread_join(read, NULL);
 }//main
@@ -117,7 +130,6 @@ void * receiveThread(void * vargp) {
 	int cur_row = 0;
 	int sub_rows, sub_cols;
 	getmaxyx(chat_window, sub_rows, sub_cols);
-	//int row, col;
 	while ((received_size = recv(sockfd, message, MSGSIZE, 0)) > 0) {
 		if (received_size == -1) { //Error
 			perror("Error receiving from server");
@@ -127,16 +139,14 @@ void * receiveThread(void * vargp) {
 		message[received_size] = '\0';
 
 		if (cur_row == sub_rows - 1) { //at the bottom row
-			//scroll(chat_window);
 			mvwprintw(chat_window, cur_row, 0, "%s\n", message);
 		} else {
 			mvwprintw(chat_window, cur_row++, 0, "%s\n", message);
 		}//if-else
-		//mvwprintw(chat_window, cur_row++, 0, "%s\n", message);
 		moveToMessage();
+		//Can't refresh the whole screen 
 		wrefresh(chat_window);
 		wrefresh(prompt_window);
-		//refresh();
 	}//while
 	pthread_cancel(*((pthread_t *) vargp));
 	pthread_exit(NULL);
@@ -155,7 +165,7 @@ void * sendThread(void * vargp) {
 	mvwprintw(prompt_window, 0, 0, PROMPT);
 	attroff(A_BOLD);
 	wrefresh(prompt_window);
-	echo();
+	echo(); //print out characters user types
 
 	while (1) {
 		wgetstr(prompt_window, message);
